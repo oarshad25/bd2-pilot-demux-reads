@@ -1,0 +1,11 @@
+# path to reads directory containing the reads for the sequencing run
+reads_dir: "/well/pharrison/users/piz649/raw_data/bd2_pilot_sequencing_data/AB_KJ_Pilot_Capture_Seq_5_11_25/Pilot_Capture_Pool/20251105_1447_P2S-03139-A_PBC84260_4711ffe3/fastq_pass"
+
+sample_reads:
+  N: 1000000
+
+dorado_demux:
+  out_dir: "results/dorado_demux"
+  kit_name: "NB96Custom" # must match name field in arrangement toml
+  barcode_arrangement_toml: "data/barcode_arrangement.toml"
+  barcode_sequences_fasta: "data/barcode_sequences.fa"

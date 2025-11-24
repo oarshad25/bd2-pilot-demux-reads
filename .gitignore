@@ -1,0 +1,14 @@
+results/**
+resources/**
+logs/**
+benchmarks/**
+.snakemake
+.snakemake/**
+**/.Rhistory
+**/*.Rproj
+**/.Rproj.user/**
+**/.RData
+**/Rplots.pdf
+report/**
+!report/*.qmd
+.Rproj.user

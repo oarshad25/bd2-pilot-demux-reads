@@ -1,0 +1,164 @@
+import os
+import glob
+
+# load configuration
+# -----------------------------------------------------
+configfile: "config/config.yaml"
+
+# target rules
+# -----------------------------------------------------
+rule all:
+    input:
+        "results/seqkit_stats/barcode_classification_table.txt"
+    default_target: True
+
+
+# merge raw demultiplexed basecalled reads
+# -----------------------------------------------------
+
+rule merge_reads:
+    """
+    Concatenate the original demultiplexed reads from the sequencing run.
+    Combines the fastq for each barcode and unclassified reads into a single fastq
+    """
+    output:
+        "results/merged_reads/merged_reads.fastq"
+    message:
+        """--- Concatenating original demultiplexed reads."""
+    params:
+        reads_dir = config["reads_dir"]
+    log:
+        "logs/merge_reads/merge_reads.log"
+    benchmark:
+        "benchmarks/merge_reads/merge_reads.benchmark.txt"
+    threads: 8
+    resources:
+        mem_mb = 32000
+    shell:
+        """
+        # load seqkit
+        module load Miniforge3/24.1.2-0
+        eval "$(conda shell.bash hook)"
+        conda activate seqkit
+
+        # concatenate with seqkit scat
+        seqkit scat -j {threads} -f {params.reads_dir} > {output} 2> {log}
+        """
+
+# sample reads (subsample reads to create a test set)
+# -----------------------------------------------------
+
+rule sample_reads:
+    """
+    create a test subsample of merged reads
+    """
+    input:
+        rules.merge_reads.output
+    output:
+        "results/sample_reads/subsampled_reads.fastq"
+    message:
+        """--- Subsampling reads."""
+    params:
+        N = config["sample_reads"]["N"]
+    log:
+        "logs/sample_reads/sample_reads.log"
+    benchmark:
+        "benchmarks/sample_reads/sample_reads.benchmark.txt"
+    threads: 1
+    resources:
+        mem_mb = 16000
+    shell:
+        """
+        set +o pipefail;
+
+        # load seqkit
+        module load Miniforge3/24.1.2-0
+        eval "$(conda shell.bash hook)"
+        conda activate seqkit
+
+        # subsample to N reads
+        cat {input} \
+            | seqkit sample -p 0.1 -s 11 \
+            | seqkit head -n {params.N} -o {output}
+        """
+
+# demux merged basecalls
+# -----------------------------------------------------
+
+rule dorado_demux:
+    """
+    demux the reads
+    """
+    input:
+        # to test demux on a subsample of reads, use subsampled reads as input:
+        # reads_path = os.path.dirname(str(rules.sample_reads.output))
+        # to run on full dataset use:
+        reads_path = config["reads_dir"]
+    output:
+        out_dir = directory(lookup(within=config, dpath="dorado_demux/out_dir")),
+        flag_file = temp(touch("dorado_demux.done"))
+    message:
+        """--- Running Dorado Demux."""
+    log:
+        "logs/dorado_demux/dorado_demux.log"
+    benchmark:
+        "benchmarks/dorado_demux/dorado_demux.benchmark.txt"
+    params:
+        kit = lookup(within=config, dpath="dorado_demux/kit_name"),
+        out_dir = lookup(within=config, dpath="dorado_demux/out_dir"),
+        arrangement = lookup(within=config, dpath="dorado_demux/barcode_arrangement_toml"),
+        sequences = lookup(within=config, dpath="dorado_demux/barcode_sequences_fasta")
+    threads: 8
+    resources:
+        mem_mb = 32000
+    shell:
+        """
+        module load dorado
+
+        dorado demux \
+            {input.reads_path} \
+            --recursive \
+            --verbose \
+            --kit-name {params.kit} \
+            --threads {threads} \
+            --emit-fastq \
+            --emit-summary \
+            --output-dir {params.out_dir} \
+            --barcode-arrangement {params.arrangement} \
+            --barcode-sequences {params.sequences} 2> {log}
+        """
+
+# demux stats with seqkit stats
+# -----------------------------------------------------
+
+rule seqkit_stats:
+    """
+    Run seqkit stats to compute stats on demultiplexed reads
+    """
+    input:
+        demuxed_reads_dir = rules.dorado_demux.output.out_dir,
+        dorado_demux_flag_file = rules.dorado_demux.output.flag_file
+    output:
+        table = "results/seqkit_stats/barcode_classification_table.txt"
+    message:
+        """--- Computing stats on demuxed files."""
+    log:
+        "logs/seqkit_stats/seqkit_stats.log"
+    benchmark:
+        "benchmarks/seqkit_stats/seqkit_stats.benchmark.txt"
+    threads: 8
+    resources:
+        mem_mb = 16000
+    shell:
+        """
+        # load seqkit
+        module load Miniforge3/24.1.2-0
+        eval "$(conda shell.bash hook)"
+        conda activate seqkit
+
+        seqkit stats \
+            --threads {threads} \
+            --tabular \
+            --all \
+            {input.demuxed_reads_dir}/*.fastq > {output.table} 2> {log}
+        """

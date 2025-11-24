@@ -1,0 +1,460 @@
+---
+title: "BD^2^ pilot barcode demultiplexing and basic read statistics"
+author: Osama Arshad
+date: last-modified
+format: 
+  html:
+    toc: true
+    toc-location: right-body
+    toc-depth: 4
+    embed-resources: true
+editor: source
+echo: false
+---
+
+```{r}
+#| label: load packages
+#| include: false
+
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(ggstats)
+library(readxl)
+library(janitor)
+library(here)
+library(plotly)
+library(htmlwidgets)
+library(DT)
+```
+
+```{r}
+#| label: read sample sheet
+samplesheet <- read_excel(here("data/Pilot sample summary.xlsx"), n_max = 40) |>
+  as_tibble(.name_repair = janitor::make_clean_names) |>
+  # rename columns
+  dplyr::rename(tissue_type = "tissue_tyoe", pre_cap_pcr_ng_ul = "pre_cap_pcr_ng_u_l") |>
+  # change barcode number to labels e.g. 2 -> barcode02 to be able to match with stats table
+  mutate(barcode = paste0("barcode", sprintf("%02d", as.numeric(barcode)))) |>
+  # change pool from numeric e.g. 1 -> Pool 1
+  mutate(pilot_capture_pool = str_c("Pool ", pilot_capture_pool))
+
+# fill in pilot capture pool values from value above
+samplesheet <- tidyr::fill(samplesheet, pilot_capture_pool)  
+```
+
+```{r}
+#| label: read demux stats
+demux_stats <- read.table("results/seqkit_stats/barcode_classification_table.txt", sep = "\t", header = TRUE) |>
+  # extract the barcode part of filename for all files except the "unclassified" fastq 
+  mutate(file = ifelse(str_detect(file, "unclassified"), "unclassified", str_extract(file, regex("barcode\\d{2}")))) |>
+  dplyr::rename(barcode = "file")
+
+demux_stats <- left_join(demux_stats, samplesheet, by = "barcode") |>
+  # create a column that captures whether barcode is assigned to a sample or not
+  mutate(class = ifelse(barcode %in% samplesheet$barcode, "sample", "unused"))
+```
+
+## Barcode Classification Summary
+
+```{r}
+#| label: classification rate
+
+# total number of reads
+n_reads <- sum(demux_stats$num_seqs)
+# number classified 
+n_classified <- sum(demux_stats$num_seqs[str_detect(demux_stats$barcode, "barcode")])
+n_unassigned <- sum(demux_stats$num_seqs[demux_stats$barcode=="unclassified"])
+
+plot_df <- data.frame(label = c("Classified", "Unclassified"), n = c(n_classified, n_unassigned)) |>
+  mutate(label = fct_relevel(label, c("Unclassified", "Classified"))) |>
+  mutate(n = n/1E6) |>
+  mutate(dummy = "dummy")
+
+# https://cran.r-project.org/web/packages/ggstats/vignettes/stat_prop.html
+plot_df |> 
+  ggplot() +
+  aes(x = dummy, fill = label, weight = n) +
+  geom_bar() +
+  geom_text(
+    aes(label = scales::percent(after_stat(prop), accuracy = 0.01)),
+    stat = "prop",
+    position = position_stack(.5)
+  ) +
+  labs(y = "Num of Reads (Mn)") +
+  scale_fill_manual(values=c("#999999", "#E69F00")) +
+  theme_minimal() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.title = element_blank()
+  )
+```
+
+From the plot above:
+
+-   Total input QC passed basecalled reads: `{r} round(n_reads/1E6, 1)` Million.
+-   Classified (assigned to a barcode): `{r} round(n_classified/1E6, 1)` Million.
+
+resulting in a barcode classification rate of `{r} round((n_classified/n_reads)*100, 1)`%. 🎉
+
+```{r}
+# remove the unassigned stats from dataframe for analyses to follow
+demux_stats <- demux_stats[demux_stats$barcode != "unclassified", ]
+  
+# barcodes with number of sequences below this threshold are considered
+# background, others high count
+background_cutoff <- 10000
+
+demux_stats <- demux_stats |>
+mutate(count_category = ifelse(num_seqs <= background_cutoff, "background", "regular")) |>
+  mutate(count_category = fct_relevel(count_category, "regular", "background")) |>
+  # create a column called 'percent' which represents fraction of reads
+  # of total column contains
+  # do not multiply by 100 as DT package will do so when displaying table 
+  mutate(percent = num_seqs/sum(num_seqs))
+```
+
+## Number of reads by barcode
+
+The distribution of reads detected for each barcode is shown below. Barcodes with less than `{r} background_cutoff/1000`k reads are considered background, rest *"regular"*.
+
+```{r}
+#| fig-height: 11
+
+demux_stats |>
+  mutate(num_seqs = num_seqs/1000) |>
+  ggplot(
+    aes(
+      x = reorder(barcode, -num_seqs), 
+      y = num_seqs, 
+      fill = class)
+    ) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values=c("#E69F00", "#999999")) +
+  labs(y = "Num of Reads (K)", fill = "barcode status") +
+  facet_wrap(~count_category, scales = "free", ncol = 1) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "bottom", 
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+    axis.title.x = element_blank(),
+  )
+```
+
+### Observations
+
+#### 1. Reasonable number of reads per barcode?
+
+```{r}
+# calculate median no. of reads for non-background barcodes
+df_stats <- demux_stats |> 
+  filter(count_category == "regular") |> 
+  mutate(num_seqs = num_seqs/1000) |>
+  summarise(min = min(num_seqs), median = median(num_seqs), max = max(num_seqs))
+```
+
+-   We see all non-background barcodes have at least `{r} prettyNum(formatC(df_stats$min, format = "d"), big.mark = ",")`k reads assigned to them.
+-   Median of `{r} prettyNum(formatC(df_stats$median, format = "d"), big.mark = ",")`k reads.
+
+#### 2. Unused barcodes fall out
+
+-   All unused barcodes bar one have hardly any counts
+
+#### 3. Two problematic barcodes
+
+-   We identify two problematic barcodes:
+
+    -   Unused barcode84 has a lot of reads
+    -   Sample barcode77 has no reads
+
+-   Potential barcode swap, mislabelling?
+
+#### 4. Uneven barcode distribution
+
+-   Assuming a uniform distribution of reads across barcodes, given that we have `{r} round(n_classified/1E6, 1)` Million classified reads and 40 samples, we roughly expect each barcode to have `{r} round((n_classified/40)*(1/1E6), 2)` Mn reads.
+
+-   However, we observe an uneven distribution of reads assigned to sample barcodes. Is this expected because of the samples we have or does this point to potential library-prep or sample pooling issues?
+
+#### 5. *"Replicate"* samples have higher counts
+
+There are six samples labelled as "replicate" in the sample sheet notes. Separating these out:
+
+```{r}
+# plot showing the number of reads assigned to repliacte samples vs other
+# add a column indicating whether sample is labelled as "replicate"
+demux_stats <- demux_stats |>
+  mutate(replicate_label = case_when(
+    str_detect(string = str_to_lower(note),
+               pattern = "replicate") ~ "replicate",
+    TRUE ~ "rest"
+  ),
+  replicate_label = fct_relevel(replicate_label, "replicate", "rest")
+  )
+
+plot_df <- demux_stats |>
+  mutate(num_seqs = num_seqs/1000) |>
+  filter(count_category != "background")
+
+plot_df_median <- plot_df |>
+  group_by(replicate_label) %>%
+  summarise(median_num_seqs = median(num_seqs))
+  
+plot_df |>
+  ggplot(
+    aes(
+      x = reorder(barcode, -num_seqs), 
+      y = num_seqs
+      )
+    ) +
+  geom_bar(stat = "identity") +
+  geom_hline(data = plot_df_median, aes(yintercept = median_num_seqs), linetype = 2)+
+  labs(y = "Num of Reads (K)") +
+  facet_wrap(~replicate_label, scales = "free_x", space="free_x", nrow = 1) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom", 
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+    axis.title.x = element_blank(),
+  )
+  
+```
+
+The replicate samples:
+
+-   Have a higher number of reads: a median of `{r} prettyNum(formatC( plot_df_median[which(plot_df_median$replicate_label=="replicate"),"median_num_seqs"], format = "d"), big.mark = ",")`k vs `{r} prettyNum(formatC( plot_df_median[which(plot_df_median$replicate_label=="rest"),"median_num_seqs"], format = "d"), big.mark = ",")`k for the rest.
+
+-   Barcode81 is the sample with the most number of reads and is annotated as *"used for the technical replicates"* in the metadata.
+
+### Linking reads per barcode to sample metadata
+
+#### Number of reads annotated by a single metadata column (non-replicate samples)
+
+For this analysis we drop the replicate samples so we can focus on the rest (we look at the replicate samples separately later below):
+
+```{r}
+# remove background barcodes, unassigned barcodes with no metadata and samples labelled replicates from stats table
+plot_df <- demux_stats |>
+  filter(count_category != "background", replicate_label != "replicate", class == "sample")
+   
+
+# function to plot barcode of counts by metadata column
+plot_counts <- function(demux_stats, metadata_column) {
+  stopifnot(metadata_column %in% colnames(demux_stats))
+  
+  demux_stats |>
+  mutate(num_seqs = num_seqs/1000) |>
+  ggplot(
+    aes(
+      x = reorder(barcode, -num_seqs), 
+      y = num_seqs, 
+      fill = !!sym(metadata_column))
+    ) +
+  geom_bar(stat = "identity") +
+  labs(y = "Num of Reads (K)") +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom", 
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+    axis.title.x = element_blank(),
+  )
+}
+```
+
+::: panel-tabset
+##### Pool
+
+```{r}
+plot_counts(plot_df, "pilot_capture_pool")
+```
+
+##### Tissue
+
+```{r}
+plot_counts(plot_df, "tissue_type")
+```
+
+Frontal cortex tends to have more reads?
+
+##### Condition
+
+```{r}
+plot_counts(plot_df, "condition")
+```
+
+##### Origin
+
+```{r}
+plot_counts(plot_df, "sample_origin")
+```
+
+"Nicola extract" has the most reads amongst non-replicate samples.
+
+##### Protocol
+
+```{r}
+plot_counts(plot_df, "protocol_used")
+```
+
+The four samples with less than 500k reads are all sgACC. However there are two other sgACC samples with 1,400k and 1,600 reads. The six sgACC samples don't differ in any of the metadata values considered here.
+:::
+
+#### Number of reads annotated by multiple metadata columns
+
+##### Replicate samples
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample")
+
+plot_df |>
+  mutate(protocol_used = fct_relevel(protocol_used, c("old", "modified old", "new"))) |>
+  filter(replicate_label == "replicate") |>
+  mutate(num_seqs = num_seqs / 1000) |>
+  ggplot(aes(x = condition, y = num_seqs, color = protocol_used, shape = sample_origin)) +
+    geom_jitter(position=position_dodge(0.8)) +
+    labs(y = "Num of Reads (K)") + 
+    facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
+    theme_bw()
+```
+
+##### Non-replicate samples
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample")
+
+plot_df |>
+  filter(replicate_label != "replicate") |>
+  mutate(num_seqs = num_seqs / 1000) |>
+  mutate(protocol_used = fct_relevel(protocol_used, c("old", "modified old", "new"))) |>
+  ggplot(aes(x = condition, y = num_seqs, color = protocol_used, shape = sample_origin)) +
+    geom_jitter(position=position_dodge(0.8)) +
+    labs(y = "Num of Reads (K)") + 
+    facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
+    theme_bw()
+  
+
+# to view underlying data:
+# demux_stats |> 
+#   filter(count_category != "background", class == "sample", replicate_label != "replicate") |> 
+#   arrange(tissue_type, condition, sample_origin, protocol_used) |> 
+#   select(barcode, tissue_type, condition, sample_origin, protocol_used, num_seqs, note) |> 
+#   View()
+
+# to get a count of samples per category:
+# demux_stats |> 
+#   filter(count_category != "background", class == "sample", replicate_label != "replicate") |> 
+#   group_by(tissue_type, condition, sample_origin, protocol_used) |> 
+#   summarise(count = n())
+```
+
+#### Observations
+
+* Frontal cortex tends to have more reads?
+* New protocol results in more reads. 
+* "Nicola extract" has the most reads amongst non-replicate samples.
+
+Note: Have only looked at categorical metadata variables, have not considered continuous covariates such as RIN or pre-cap PCR concentrations.
+
+## Median read length by barcode
+
+Read length (N50) distribution for barcodes:
+
+```{r}
+# remove background barcodes
+plot_df <- demux_stats |>
+  filter(count_category != "background")
+
+plot_df |>
+  ggplot(
+    aes(
+      x = reorder(barcode, -N50), 
+      y = N50
+      )
+    ) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(name="N50", labels = scales::comma) +
+  theme_minimal() +
+  theme(
+    legend.position = "none", 
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+    axis.title.x = element_blank(),
+  )
+```
+
+-   Min: `{r} prettyNum(summarise(plot_df, min(N50)), big.mark = ",", format = "d")`k
+-   Max: `{r} prettyNum(summarise(plot_df, max(N50)), big.mark = ",", format = "d")`k
+-   Median: `{r} prettyNum(summarise(plot_df, median(N50)), big.mark = ",", format = "d")`k
+
+### Annotated by metadata
+
+Combined plot of replicate and non-replicate samples
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample")
+
+plot_df |>
+  mutate(protocol_used = fct_relevel(protocol_used, c("old", "modified old", "new"))) |>
+  mutate(plot_points_label = ifelse(replicate_label == "replicate", "R", "")) |>
+  ggplot(aes(x = condition, y = N50, color = protocol_used, shape = sample_origin)) +
+    #geom_jitter(position=position_dodge(0.8)) +
+    geom_jitter(position = position_jitter(seed = 1)) +
+    ggrepel::geom_text_repel(aes(label = ifelse(replicate_label == "replicate", "R", "")), position = position_jitter(seed = 1)) +
+    labs(y = "N50") + 
+    facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
+    theme_bw()
+```
+
+The samples labelled "R" are the six replicate samples.
+
+#### Replicate samples
+
+```{r}
+demux_stats |>
+  mutate(protocol_used = fct_relevel(protocol_used, c("old", "modified old", "new"))) |>
+  filter(count_category != "background", class == "sample", replicate_label == "replicate") |>
+  ggplot(aes(x = condition, y = N50, color = protocol_used, shape = sample_origin)) +
+    geom_jitter(position=position_dodge(0.8)) +
+    labs(y = "N50") + 
+    facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
+    theme_bw()
+```
+
+#### Non-replicate samples
+
+```{r}
+demux_stats |>
+  mutate(protocol_used = fct_relevel(protocol_used, c("old", "modified old", "new"))) |>
+  filter(count_category != "background", class == "sample", replicate_label != "replicate") |>
+  ggplot(aes(x = condition, y = N50, color = protocol_used, shape = sample_origin)) +
+    geom_jitter(position=position_dodge(0.8)) +
+    labs(y = "N50") + 
+    facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
+    theme_bw()
+```
+
+### Observations
+
+-   sgACC and striatum reads are somewhat shorter than those from frontal cortex and hippocampus?
+-   New protocol tends to produce slightly longer reads.
+-   "Nicola extract" sample has the longest reads.
+
+## Data
+
+```{r}
+demux_stats %>%
+  dplyr::select(barcode, class, num_seqs, N50, everything()) %>%
+  dplyr::select(-format, -type, -c(sum_len:sum_n)) %>% 
+  # https://martinctc.github.io/blog/vignette-downloadable-tables-in-rmarkdown-with-the-dt-package/
+  DT::datatable(extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All")))
+                ) %>% 
+  formatCurrency('num_seqs', currency = "", interval = 3, mark = ",", digits = 0) %>% 
+  formatCurrency('N50', currency = "", interval = 3, mark = ",", digits = 0) %>%
+  formatPercentage('percent', digits = 1)
+```
