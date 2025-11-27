@@ -156,28 +156,19 @@ df_stats <- demux_stats |>
 
 -   We see all non-background barcodes have at least `{r} prettyNum(formatC(df_stats$min, format = "d"), big.mark = ",")`k reads assigned to them.
 -   Median of `{r} prettyNum(formatC(df_stats$median, format = "d"), big.mark = ",")`k reads.
--   As shown in a plot to come, the four sample barcodes with less than 500k reads are all from sgACC.
+-   As shown in a plot to come, four out of the five sample barcodes with less than 500k reads are from sgACC.
 
 #### 2. Unused barcodes fall out
 
--   All unused barcodes bar one have hardly any counts
+-   All unused barcodes have hardly any counts
 
-#### 3. Two problematic barcodes
-
--   We identify two problematic barcodes:
-
-    -   Unused barcode84 has a lot of reads
-    -   Sample barcode77 has no reads
-
--   Potential barcode swap, mislabelling?
-
-#### 4. Uneven barcode distribution
+#### 3. Uneven barcode distribution
 
 -   Assuming a uniform distribution of reads across barcodes, given that we have `{r} round(n_classified/1E6, 1)` Million classified reads and 40 samples, we roughly expect each barcode to have `{r} round((n_classified/40)*(1/1E6), 2)` Mn reads.
 
 -   However, we observe an uneven distribution of reads assigned to sample barcodes. Is this expected because of the samples we have or does this point to potential library-prep or sample pooling issues?
 
-#### 5. *"Replicate"* samples have higher counts
+#### 4. *"Replicate"* samples have higher counts
 
 There are six samples labelled as "replicate" in the sample sheet notes. Separating these out:
 
@@ -297,7 +288,7 @@ plot_counts(plot_df, "sample_origin")
 plot_counts(plot_df, "protocol_used")
 ```
 
-The four samples with less than 500k reads are all sgACC. However there are two other sgACC samples with 1,400k and 1,600 reads. The six sgACC samples don't differ in any of the metadata values considered here.
+Four out of the five samples, with less than 500k reads are from sgACC. However there are two other sgACC samples with 1,400k and 1,600 reads. The six sgACC samples don't differ in any of the metadata values considered here.
 :::
 
 #### Number of reads annotated by multiple metadata columns
