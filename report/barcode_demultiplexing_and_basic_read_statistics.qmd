@@ -81,7 +81,7 @@ plot_df |>
     stat = "prop",
     position = position_stack(.5)
   ) +
-  labs(y = "Num of Reads (Mn)") +
+  labs(y = "No. of Reads (Mn)") +
   scale_fill_manual(values=c("#999999", "#E69F00")) +
   theme_minimal() +
   theme(axis.title.x=element_blank(),
@@ -132,7 +132,7 @@ demux_stats |>
     ) +
   geom_bar(stat = "identity") +
   scale_fill_manual(values=c("#E69F00", "#999999")) +
-  labs(y = "Num of Reads (K)", fill = "barcode status") +
+  labs(y = "No. of Reads (K)", fill = "barcode status") +
   facet_wrap(~count_category, scales = "free", ncol = 1) +
   theme_bw(base_size = 12) +
   theme(
@@ -156,6 +156,7 @@ df_stats <- demux_stats |>
 
 -   We see all non-background barcodes have at least `{r} prettyNum(formatC(df_stats$min, format = "d"), big.mark = ",")`k reads assigned to them.
 -   Median of `{r} prettyNum(formatC(df_stats$median, format = "d"), big.mark = ",")`k reads.
+-   As shown in a plot to come, the four sample barcodes with less than 500k reads are all from sgACC.
 
 #### 2. Unused barcodes fall out
 
@@ -209,7 +210,7 @@ plot_df |>
     ) +
   geom_bar(stat = "identity") +
   geom_hline(data = plot_df_median, aes(yintercept = median_num_seqs), linetype = 2)+
-  labs(y = "Num of Reads (K)") +
+  labs(y = "No. of Reads (K)") +
   facet_wrap(~replicate_label, scales = "free_x", space="free_x", nrow = 1) +
   theme_bw() +
   theme(
@@ -251,7 +252,7 @@ plot_counts <- function(demux_stats, metadata_column) {
       fill = !!sym(metadata_column))
     ) +
   geom_bar(stat = "identity") +
-  labs(y = "Num of Reads (K)") +
+  labs(y = "No. of Reads (K)") +
   theme_minimal() +
   theme(
     legend.position = "bottom", 
@@ -313,7 +314,7 @@ plot_df |>
   mutate(num_seqs = num_seqs / 1000) |>
   ggplot(aes(x = condition, y = num_seqs, color = protocol_used, shape = sample_origin)) +
     geom_jitter(position=position_dodge(0.8)) +
-    labs(y = "Num of Reads (K)") + 
+    labs(y = "No. of Reads (K)") + 
     facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
     theme_bw()
 ```
@@ -330,7 +331,7 @@ plot_df |>
   mutate(protocol_used = fct_relevel(protocol_used, c("old", "modified old", "new"))) |>
   ggplot(aes(x = condition, y = num_seqs, color = protocol_used, shape = sample_origin)) +
     geom_jitter(position=position_dodge(0.8)) +
-    labs(y = "Num of Reads (K)") + 
+    labs(y = "No. of Reads (K)") + 
     facet_wrap(~tissue_type, scales = "free_x", space="free_x", nrow = 1) +
     theme_bw()
   
