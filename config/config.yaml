@@ -9,3 +9,8 @@ dorado_demux:
   kit_name: "NB96Custom" # must match name field in arrangement toml
   barcode_arrangement_toml: "data/barcode_arrangement.toml"
   barcode_sequences_fasta: "data/barcode_sequences.fa"
+
+# Final output directory to place the demultiplexed reads in
+# Each barcode fastq output by dorado demux is placed within it's own subdirectory
+# within this parent directory
+out_dir: "results/output_reads"

@@ -11,7 +11,9 @@ demultiplexing (by jusyt specifying the kit used).
 Thus, we do our own demultiplexing.
 
 This workflow demuxes the basecalled fastq reads in a given directory
-(specified by `reads_dir` in config).
+(specified by `reads_dir` in config), computes statistics on demuxed reads (no. of reads, N50 etc.)
+and places the demultiplexed reads into seperate subdirectories for each barcode within
+the specified output directory.
 
 ## Workflow overview
 
@@ -26,6 +28,16 @@ a subsample.
 2. Subsample to N reads.
 3. Demultiplex the basecalled reads
 4. Compute statistics on demultiplexed reads.
+5. Copy the demultiplexed reads to specified output directory (in config) with seperate subdirectories for each barcode
+
+```
+out_dir/
+    ├── barcode01/
+    │     └── ...barcode01.fastq
+    ├── barcode02/
+    │     └── ...barcode02.fastq
+    └── ...
+```
 
 For full dataset workflow proceeds from step 3.
 
@@ -58,9 +70,13 @@ change the input of `dorado_demux` rule by uncommenting the relevant line.
 
 ## Workflow output
 
-The following output is produced within the `results` directory
-1. Demultiplexed fastq's
-2. Stats on demultiplexed reads.
+The following output (subdirectories) are produced within the `results` directory
+1. *merged_reads:* Aggregated reads across specified input directory
+2. *sample_reads:* Subsample of merged reads
+3. *dorado_demux:* Output of dorado demux (demultiplexed fastq's)
+4. *seqkit_stats:* Statistics table of demultiplexed read fastqs.
+5. *output_reads:* Output directory of demultiplexed reads with subdirectories for
+   each barcode containing the reads fastq for the corresponding barcode
 
 ## Post workflow (run on laptop)
 
