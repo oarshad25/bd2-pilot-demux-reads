@@ -17,14 +17,18 @@ echo: false
 #| include: false
 
 library(tidyverse)
+library(knitr)
 library(ggplot2)
 library(ggrepel)
+library(ggpubr)
+library(scales)
 library(ggstats)
 library(readxl)
 library(janitor)
 library(here)
 library(plotly)
 library(htmlwidgets)
+library(kableExtra)
 library(DT)
 ```
 
@@ -220,7 +224,7 @@ The replicate samples:
 
 ### Linking reads per barcode to sample metadata
 
-#### Number of reads annotated by a single metadata column (non-replicate samples)
+#### Number of reads annotated by a single categorical metadata column (non-replicate samples)
 
 For this analysis we drop the replicate samples so we can focus on the rest (we look at the replicate samples separately later below):
 
@@ -291,7 +295,7 @@ plot_counts(plot_df, "protocol_used")
 Four out of the five samples, with less than 500k reads are from sgACC. However there are two other sgACC samples with 1,400k and 1,600 reads. The six sgACC samples don't differ in any of the metadata values considered here.
 :::
 
-#### Number of reads annotated by multiple metadata columns
+#### Number of reads annotated by multiple categorical metadata columns
 
 ##### Replicate samples
 
@@ -349,6 +353,43 @@ plot_df |>
 
 Note: Have only looked at categorical metadata variables, have not considered continuous covariates such as RIN or pre-cap PCR concentrations.
 
+#### Number of reads annotated by continuous metadata columns
+
+##### Number of reads vs RIN
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample") |>
+  mutate(num_seqs = num_seqs/1000)
+   
+plot_df |>
+  ggplot(aes(x = rin, y = num_seqs)) +
+    geom_point() +
+    ggpubr::stat_cor(p.accuracy = 0.001, r.accuracy = 0.01) +
+    geom_text_repel(data = subset(plot_df, rin < 6), aes(label = barcode)) +
+    scale_y_continuous(name="No. of reads (K)", labels = scales::comma) +
+    labs(x = "RIN") +
+    theme_bw()
+```
+
+##### Number of reads vs pre-cap PCR
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample") |>
+  mutate(num_seqs = num_seqs/1000)
+   
+plot_df |>
+  ggplot(aes(x = pre_cap_pcr_ng_ul, y = num_seqs)) +
+    geom_point() +
+    ggpubr::stat_cor(p.accuracy = 0.001, r.accuracy = 0.01) +
+    scale_y_continuous(name="No. of reads (K)", labels = scales::comma) +
+    labs(x = "Pre-cap PCR (ng/ul)") +
+    theme_bw()
+```
+
+Thus, the number of reads does not correlate with RIN or pre-cap PCR concentrations.
+
 ## Median read length by barcode
 
 Read length (N50) distribution for barcodes:
@@ -379,7 +420,7 @@ plot_df |>
 -   Max: `{r} prettyNum(summarise(plot_df, max(N50)), big.mark = ",", format = "d")`k
 -   Median: `{r} prettyNum(summarise(plot_df, median(N50)), big.mark = ",", format = "d")`k
 
-### Annotated by metadata
+### Annotated by categorical metadata
 
 Combined plot of replicate and non-replicate samples
 
@@ -432,6 +473,78 @@ demux_stats |>
 -   sgACC and striatum reads are somewhat shorter than those from frontal cortex and hippocampus?
 -   New protocol tends to produce slightly longer reads.
 -   "Nicola extract" sample has the longest reads.
+
+### N50 vs continuous metadata columns
+
+##### N50 vs RIN
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample")
+   
+plot_df |>
+  ggplot(aes(x = rin, y = N50)) +
+    geom_point() +
+    ggpubr::stat_cor(p.accuracy = 0.001, r.accuracy = 0.01) +
+    scale_y_continuous(name="N50", labels = scales::comma) +
+    labs(x = "RIN") +
+    theme_bw()
+```
+
+Dividing the samples into three bins, median N50 for each bin is:
+
+```{r}
+# calculate median N50 of samples with RIN below and above threshold
+
+# threshold to seperate into upper and lower bins
+plot_df |>
+  mutate(bin = case_when(
+    rin < 6 ~ "RIN < 6",
+    dplyr::between(rin, 6, 8) ~ "6 < RIN < 8",
+    rin >= 8 ~ "RIN > 8"
+  )) |>
+  mutate(bin = fct_relevel(bin, c("RIN < 6", "6 < RIN < 8", "RIN > 8"))) |>
+  group_by(bin) |>
+  summarise(median = median(N50)) |>
+  kbl() %>%
+  kable_styling()
+```
+
+##### N50 vs pre-cap PCR
+
+```{r}
+plot_df <- demux_stats |>
+  filter(count_category != "background", class == "sample")
+   
+plot_df |>
+  ggplot(aes(x = pre_cap_pcr_ng_ul, y = N50)) +
+    geom_point() +
+    ggpubr::stat_cor(p.accuracy = 0.001, r.accuracy = 0.01) +
+    scale_y_continuous(name="N50", labels = scales::comma) +
+    labs(x =  "Pre-cap PCR (ng/ul)") +
+    theme_bw()
+```
+
+```{r}
+precap_pcr_threshold <- 50
+```
+
+Dividing the samples into two bins with a concentration above and below `{r} precap_pcr_threshold` (ng/ul),
+the median N50 for the lower and upper bins are:
+
+```{r}
+# calculate median N50 of concentration below and above threshold
+
+# threshold to seperate into upper and lower bins
+plot_df |>
+  mutate(bin = ifelse(pre_cap_pcr_ng_ul > precap_pcr_threshold, "upper", "lower")) |>
+  group_by(bin) |>
+  summarise(median = median(N50)) |>
+  kbl() %>%
+  kable_styling()
+```
+
+
 
 ## Data
 
