@@ -125,6 +125,7 @@ rule dorado_demux:
             --emit-fastq \
             --emit-summary \
             --output-dir {params.out_dir} \
+            --no-trim \
             --barcode-arrangement {params.arrangement} \
             --barcode-sequences {params.sequences} 2> {log}
         """
