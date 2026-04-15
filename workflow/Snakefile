@@ -19,15 +19,16 @@ rule all:
 
 rule merge_reads:
     """
-    Concatenate the original demultiplexed reads from the sequencing run.
+    Concatenate the original demultiplexed reads from the sequencing run(s).
     Combines the fastq for each barcode and unclassified reads into a single fastq
+    Supports merging across multiple run directories (e.g. interrupted + resumed run)
     """
     output:
         "results/merged_reads/merged_reads.fastq"
     message:
         """--- Concatenating original demultiplexed reads."""
     params:
-        reads_dir = config["reads_dir"]
+        reads_dirs = config["reads_dirs"]
     log:
         "logs/merge_reads/merge_reads.log"
     benchmark:
@@ -42,8 +43,9 @@ rule merge_reads:
         eval "$(conda shell.bash hook)"
         conda activate seqkit
 
-        # concatenate with seqkit scat
-        seqkit scat -j {threads} -f {params.reads_dir} > {output} 2> {log}
+        # concatenate with seqkit scat and remove any duplicate reads with rmdup
+        (seqkit scat -j {threads} -f {params.reads_dirs} | \
+        seqkit rmdup -n -j {threads} -o {output}) 2> {log}
         """
 
 # sample reads (subsample reads to create a test set)
@@ -92,9 +94,9 @@ rule dorado_demux:
     """
     input:
         # to test demux on a subsample of reads, use subsampled reads as input:
-        # reads_path = os.path.dirname(str(rules.sample_reads.output))
+        # merged_fastq = rules.sample_reads.output
         # to run on full dataset use:
-        reads_path = config["reads_dir"]
+        merged_fastq = rules.merge_reads.output
     output:
         out_dir = directory(lookup(within=config, dpath="dorado_demux/out_dir")),
         flag_file = touch("results/flag_files/dorado_demux.done")
@@ -117,8 +119,7 @@ rule dorado_demux:
         module load dorado
 
         dorado demux \
-            {input.reads_path} \
-            --recursive \
+            {input.merged_fastq} \
             --verbose \
             --kit-name {params.kit} \
             --threads {threads} \
@@ -163,16 +164,17 @@ rule seqkit_stats:
             --threads {threads} \
             --tabular \
             --all \
+            --basename \
             {input.demuxed_reads_dir}/*.fastq > {output.table} 2> {log}
         """
 
-# copy each fastq from demultiplexing into it's own directory
+# copy demultiplexed fastq(s) for each barcode into own directory
 # -----------------------------------------------------
 
 rule create_output_reads_dir:
     """
-    copy each demultiplexed fastq into it's own subdirectory within target output directory
-    e.g. copy the fastq for barcodeXX into a subdirectory called barcodeXX
+    copy demultiplexed fastq(s) per barcode into own subdirectory within target output directory
+    e.g. copy the fastq(s) for barcodeXX into a subdirectory called barcodeXX
     """
     input:
         dorado_demux_out_dir = rules.dorado_demux.output.out_dir,
@@ -188,7 +190,7 @@ rule create_output_reads_dir:
         # create output directory
         mkdir -p {params.out_dir}
 
-        # move reads for each sample into it's own subdirectory within '{params.out_dir}'
+        # move reads for each barcode into it's own subdirectory within '{params.out_dir}'
         for fastq in {input.dorado_demux_out_dir}/*barcode*.fastq
         do
             # Extract the barcodeNN part (e.g., barcode01)

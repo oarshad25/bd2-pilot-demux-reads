@@ -1,5 +1,7 @@
-# path to reads directory containing the reads for the sequencing run
-reads_dir: "/well/pharrison/users/piz649/raw_data/bd2_pilot_sequencing_data/AB_KJ_Pilot_Capture_Seq_5_11_25/Pilot_Capture_Pool/20251105_1447_P2S-03139-A_PBC84260_4711ffe3/fastq_pass"
+# path to reads directory/directories containing the fastq pass reads for the sequencing run
+reads_dirs:
+  - "/well/pharrison/users/piz649/raw_data/bd2_pilot2_sequencing_data/BD2_Capture_pilot_2_300326/BD2_Capture_pilot_2_300326_2/20260331_1407_P2S-03139-A_PBI33122_e36e304a/fastq_pass"
+  - "/well/pharrison/users/piz649/raw_data/bd2_pilot2_sequencing_data/BD2_Capture_pilot_2_300326/Pilot_capture2/20260330_1237_P2S-03139-A_PBI33122_3a9c76ff/fastq_pass"
 
 sample_reads:
   N: 1000000
