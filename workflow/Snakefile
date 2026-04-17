@@ -10,7 +10,6 @@ configfile: "config/config.yaml"
 rule all:
     input:
         "results/seqkit_stats/barcode_classification_table.txt",
-        "results/flag_files/create_output_reads_dir.done"
     default_target: True
 
 
@@ -129,6 +128,105 @@ rule dorado_demux:
             --no-trim \
             --barcode-arrangement {params.arrangement} \
             --barcode-sequences {params.sequences} 2> {log}
+
+        touch {output.flag_file}
+        """
+
+# copy demultiplexed fastq(s) for each barcode into own directory
+# -----------------------------------------------------
+
+rule create_barcode_subdirectories:
+    """
+    move demultiplexed fastq(s) per barcode into own subdirectory within dorado demux output directory
+    e.g. move the fastq(s) for barcodeXX into a subdirectory called barcodeXX
+    """
+    input:
+        dorado_demux_out_dir = rules.dorado_demux.output.out_dir,
+    output:
+        touch("results/flag_files/create_barcode_subdirectories.done")
+    message:
+        """--- Moving demultiplexed fastq's into per barcode subdirectories."""
+    params:
+        out_dir = config["out_dir"]
+    shell:
+        """
+        # move demuliplexed reads for each barcode into it's own subdirectory within dorado output directory'
+        for fastq in {input.dorado_demux_out_dir}/*barcode*.fastq
+        do
+            # Extract the barcodeNN part (e.g., barcode01)
+            barcode=$(basename "$fastq" | grep -o 'barcode[0-9]\+')
+
+            # Make sure we found a barcode
+            if [[ -n "$barcode" ]]; then
+                # Create barcode directory inside target_dir
+                mkdir -p "{input.dorado_demux_out_dir}/$barcode"
+
+                # Copy file into that directory
+                mv "$fastq" "{input.dorado_demux_out_dir}/$barcode/"
+
+                echo "Moved "$fastq" -> {input.dorado_demux_out_dir}/$barcode/"
+            else
+                echo "WARNING: No barcode found in $fastq"
+            fi
+        done
+
+        # copy the unclassified reads into their own subdirectory as well
+        mkdir -p "{input.dorado_demux_out_dir}/unclassified"
+        mv {input.dorado_demux_out_dir}/*unclassified*.fastq "{input.dorado_demux_out_dir}/unclassified/"
+
+        touch {output}
+        """
+
+# merge demultiplexed fastq(s) for each barcode into own directory
+# -----------------------------------------------------
+
+rule merge_barcode_fastqs:
+    """
+    merge the demultiplexed fastq(s) for each barcode into a single fastq per barcode
+    e.g. merge all fastq(s) for barcodeXX into a single fastq called barcodeXX.fastq
+    """
+    input:
+        dorado_demux_out_dir = rules.dorado_demux.output.out_dir,
+        create_barcode_subdirectories_flag_file = rules.create_barcode_subdirectories.output
+    output:
+        touch("results/flag_files/merge_barcode_fastqs.done")
+    message:
+        """--- Merging demultiplexed fastq's for each barcode into a single fastq."""
+    params:
+        out_dir = config["out_dir"]
+    shell:
+        """
+        mkdir -p {params.out_dir}
+
+        # merge the fastq(s) for each barcode into a single fastq per barcode and place merged fastq in target output directory
+        for dir in {input.dorado_demux_out_dir}/*barcode*
+        do
+            if [ -d "$dir" ]; then
+                barcode=$(basename "$dir")
+                mkdir -p "{params.out_dir}/$barcode"
+                files=("$dir"/*.fastq)
+                printf 'Concatenating files for %s:\n' "$barcode"
+                printf '  %s\n' "${{files[@]}}"
+                cat "${{files[@]}}" > "{params.out_dir}/$barcode/$barcode.fastq"
+                echo "Merged ${{files[*]}} -> {params.out_dir}/$barcode/$barcode.fastq"
+            else
+                echo "WARNING: No directory found at $dir"
+            fi
+        done
+
+        # merge the unclassified reads into a single fastq as well
+        if [ -d "{input.dorado_demux_out_dir}/unclassified" ]; then
+            mkdir -p "{params.out_dir}/unclassified"
+            files=("{input.dorado_demux_out_dir}/unclassified"/*.fastq)
+            printf 'Concatenating files for unclassified:\n'
+            printf '  %s\n' "${{files[@]}}"
+            cat "${{files[@]}}" > "{params.out_dir}/unclassified/unclassified.fastq"
+            echo "Merged ${{files[*]}} -> {params.out_dir}/unclassified/unclassified.fastq"
+        else
+            echo "WARNING: No directory found at {params.out_dir}/unclassified"
+        fi
+
+        touch {output}
         """
 
 # demux stats with seqkit stats
@@ -136,16 +234,16 @@ rule dorado_demux:
 
 rule seqkit_stats:
     """
-    Run seqkit stats to compute stats on demultiplexed reads
+    Run seqkit stats to compute stats on output demultiplexed reads
     """
     input:
-        demuxed_reads_dir = rules.dorado_demux.output.out_dir,
-        dorado_demux_flag_file = rules.dorado_demux.output.flag_file
+        reads_dir = config["out_dir"],
+        merge_barcode_fastqs_flag_file = rules.merge_barcode_fastqs.output
     output:
         table = "results/seqkit_stats/barcode_classification_table.txt",
         flag_file = touch("results/flag_files/seqkit_stats.done")
     message:
-        """--- Computing stats on demuxed files."""
+        """--- Computing stats on final demuxed files."""
     log:
         "logs/seqkit_stats/seqkit_stats.log"
     benchmark:
@@ -160,57 +258,11 @@ rule seqkit_stats:
         eval "$(conda shell.bash hook)"
         conda activate seqkit
 
+        shopt -s globstar
+
         seqkit stats \
             --threads {threads} \
             --tabular \
             --all \
-            --basename \
-            {input.demuxed_reads_dir}/*.fastq > {output.table} 2> {log}
+            {input.reads_dir}/*/*.fastq > {output.table} 2> {log}
         """
-
-# copy demultiplexed fastq(s) for each barcode into own directory
-# -----------------------------------------------------
-
-rule create_output_reads_dir:
-    """
-    copy demultiplexed fastq(s) per barcode into own subdirectory within target output directory
-    e.g. copy the fastq(s) for barcodeXX into a subdirectory called barcodeXX
-    """
-    input:
-        dorado_demux_out_dir = rules.dorado_demux.output.out_dir,
-        seqkit_stats_flag_file = rules.seqkit_stats.output.flag_file
-    output:
-        touch("results/flag_files/create_output_reads_dir.done")
-    message:
-        """--- Creating final output demultiplexed read directory."""
-    params:
-        out_dir = config["out_dir"]
-    shell:
-        """
-        # create output directory
-        mkdir -p {params.out_dir}
-
-        # move reads for each barcode into it's own subdirectory within '{params.out_dir}'
-        for fastq in {input.dorado_demux_out_dir}/*barcode*.fastq
-        do
-            # Extract the barcodeNN part (e.g., barcode01)
-            barcode=$(basename "$fastq" | grep -o 'barcode[0-9]\+')
-
-            # Make sure we found a barcode
-            if [[ -n "$barcode" ]]; then
-                # Create barcode directory inside target_dir
-                mkdir -p "{params.out_dir}/$barcode"
-
-                # Copy file into that directory
-                cp "$fastq" "{params.out_dir}/$barcode/"
-
-                echo "Copied "$fastq" -> {params.out_dir}/$barcode/"
-            else
-                echo "WARNING: No barcode found in $fastq"
-            fi
-        done
-
-        touch {output}
-        """
-
-
